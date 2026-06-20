@@ -223,49 +223,65 @@ function TableOverview({ db, onOpen, onBill }) {
     return { count: open.length, sum: open.reduce((a, i) => a + i.price * i.qty, 0) };
   };
 
+  const press = (k) => {
+    setErr("");
+    if (k === "⌫") { setInput((v) => v.slice(0, -1)); return; }
+    if (input.length >= 4) return;
+    setInput((v) => v + k);
+  };
+
   const submit = () => {
     const n = parseInt(input, 10);
-    if (!input || isNaN(n) || n < 1 || n > TISCHE.length) {
-      setErr(`Bitte eine Tischnummer zwischen 1 und ${TISCHE.length} eingeben.`);
+    if (input === "" || isNaN(n) || n < 0 || n > 9999) {
+      setErr("Bitte eine Tischnummer (0–9999) eingeben.");
       return;
     }
     setErr("");
     onOpen(n);
   };
 
-  const info = input && !isNaN(parseInt(input, 10)) ? tableInfo(parseInt(input, 10)) : null;
+  const n = parseInt(input, 10);
+  const validNum = input !== "" && !isNaN(n);
+  const info = validNum ? tableInfo(n) : null;
   const busy = info && info.count > 0;
 
   return (
     <div style={S.center}>
       <div style={S.tischInputBox}>
-        <h2 style={{ ...S.h2, textAlign: "center", margin: "0 0 6px" }}>Tisch wählen</h2>
-        <p style={{ ...S.brandSub, textAlign: "center", marginBottom: 20 }}>Tischnummer eingeben</p>
-        <input
-          type="number"
-          min={1}
-          max={TISCHE.length}
-          value={input}
-          onChange={(e) => { setInput(e.target.value); setErr(""); }}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="z. B. 5"
-          style={S.tischInput}
-          autoFocus
-        />
-        {info && (
-          <div style={{ ...S.tischStatus, ...(busy ? S.tischStatusBusy : {}) }}>
-            {busy
-              ? `Tisch ${parseInt(input, 10)}: ${info.count} offene Posten · ${euro(info.sum)}`
-              : `Tisch ${parseInt(input, 10)}: frei`}
+        <h2 style={{ ...S.h2, textAlign: "center", margin: "0 0 14px" }}>Tisch wählen</h2>
+
+        {/* Anzeige */}
+        <div style={S.tischDisplay}>
+          {input !== "" ? input : <span style={{ color: sub, opacity: 0.4, fontWeight: 400 }}>—</span>}
+        </div>
+
+        {/* Status */}
+        {validNum && (
+          <div style={{ ...S.tischStatus, ...(busy ? S.tischStatusBusy : {}), marginBottom: 4 }}>
+            {busy ? `Tisch ${n}: ${info.count} offene Posten · ${euro(info.sum)}` : `Tisch ${n}: frei`}
           </div>
         )}
         {err && <div style={S.errText}>{err}</div>}
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button style={S.tischConfirm} className="lift" onClick={submit}>Öffnen</button>
-          {busy && (
-            <button style={S.tischBillBtn} className="lift" onClick={() => onBill(parseInt(input, 10))}>Rechnung</button>
-          )}
+
+        {/* Numpad */}
+        <div style={S.numpadGrid}>
+          {["1","2","3","4","5","6","7","8","9","⌫","0","OK"].map((k) => (
+            <button
+              key={k}
+              className="lift"
+              style={{ ...S.numpadKey, ...(k === "OK" ? S.numpadOk : k === "⌫" ? S.numpadDel : {}) }}
+              onClick={() => k === "OK" ? submit() : press(k)}
+            >
+              {k}
+            </button>
+          ))}
         </div>
+
+        {busy && (
+          <button style={{ ...S.tischBillBtn, width: "100%", marginTop: 10, borderRadius: 12, padding: "13px 0" }} className="lift" onClick={() => onBill(n)}>
+            Rechnung · Tisch {n}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1430,12 +1446,17 @@ const S = {
   tableFree: { fontSize: 13, color: sub },
   tableBill: { background: amber, color: ink, fontWeight: 700, padding: "10px 0", fontSize: 14 },
 
-  tischInputBox: { background: panel, border: `1px solid ${line}`, borderRadius: 20, padding: "32px 28px", width: "100%", maxWidth: 340, display: "flex", flexDirection: "column", alignItems: "stretch" },
+  tischInputBox: { background: panel, border: `1px solid ${line}`, borderRadius: 20, padding: "28px 24px 24px", width: "100%", maxWidth: 340, display: "flex", flexDirection: "column", alignItems: "stretch" },
   tischInput: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, color: txt, fontSize: 32, fontWeight: 700, fontFamily: "Fraunces, serif", textAlign: "center", padding: "14px 12px", outline: "none", width: "100%", boxSizing: "border-box" },
-  tischStatus: { marginTop: 10, fontSize: 13, color: sub, textAlign: "center", padding: "8px 12px", background: panel2, borderRadius: 10, border: `1px solid ${line}` },
+  tischDisplay: { background: panel2, border: `1px solid ${line}`, borderRadius: 14, fontSize: 48, fontWeight: 800, fontFamily: "Fraunces, serif", color: amber, textAlign: "center", padding: "14px 12px", marginBottom: 10, minHeight: 82, display: "flex", alignItems: "center", justifyContent: "center", letterSpacing: "0.08em" },
+  tischStatus: { fontSize: 13, color: sub, textAlign: "center", padding: "8px 12px", background: panel2, borderRadius: 10, border: `1px solid ${line}`, marginBottom: 6 },
   tischStatusBusy: { color: amber, borderColor: amber + "88" },
   tischConfirm: { flex: 1, background: amber, color: ink, fontWeight: 700, borderRadius: 12, padding: "14px 0", fontSize: 16 },
-  tischBillBtn: { background: panel2, color: txt, border: `1px solid ${line}`, fontWeight: 600, borderRadius: 12, padding: "14px 16px", fontSize: 14 },
+  tischBillBtn: { background: amber, color: ink, fontWeight: 700, borderRadius: 12, padding: "14px 16px", fontSize: 15 },
+  numpadGrid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 },
+  numpadKey: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, color: txt, fontSize: 24, fontWeight: 700, fontFamily: "Fraunces, serif", padding: "16px 0" },
+  numpadOk: { background: amber, color: ink, fontFamily: "Inter, system-ui, sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: "0.02em" },
+  numpadDel: { color: sub, fontSize: 20, fontFamily: "Inter, system-ui, sans-serif", fontWeight: 400 },
 
   orderLayout: { display: "grid", gridTemplateColumns: "1fr 360px", gap: 0, flex: 1, minHeight: 0 },
   menuPane: { padding: 18, overflowY: "auto" },
