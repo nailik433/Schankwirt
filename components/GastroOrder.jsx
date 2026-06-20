@@ -1,6 +1,6 @@
 "use client";
 
-import { useStaff, useTables, useTickets, usePayments, submitOrder, settlePayment, hasSupabase } from "@/lib/data";
+import { useStaff, useTables, useTickets, usePayments, submitOrder, settlePayment, hasSupabase, useDays, usePaymentOverrides } from "@/lib/data";
 import React, { useState, useEffect, useMemo } from "react";
 
 /* ============================================================================
@@ -731,10 +731,17 @@ function Admin({ onExit }) {
   return <AdminPanelLive onExit={onExit} />;
 }
 
-// Lädt die Buchungen aus Supabase und reicht sie ins bestehende Panel.
 function AdminPanelLive({ onExit }) {
   const { payments } = usePayments();
-  return <AdminPanel payments={payments} onExit={onExit} />;
+  const { days, dayStart, closeDay } = useDays();
+  const { overrides, applyOverride, clearOverride } = usePaymentOverrides();
+  return (
+    <AdminPanel
+      payments={payments} days={days} dayStart={dayStart} onCloseDay={closeDay}
+      overrides={overrides} onOverride={applyOverride} onClearOverride={clearOverride}
+      onExit={onExit}
+    />
+  );
 }
 
 function AdminLogin({ onOk, onExit }) {
@@ -768,17 +775,56 @@ function AdminLogin({ onOk, onExit }) {
   );
 }
 
-function AdminPanel({ payments, onExit }) {
-  const [sortKey, setSortKey] = useState("ts");   // ts | tisch | bedienung | amount
-  const [sortDir, setSortDir] = useState("desc"); // asc | desc
+function AdminPanel({ payments, days, dayStart, onCloseDay, overrides, onOverride, onClearOverride, onExit }) {
+  const [sortKey, setSortKey] = useState("ts");
+  const [sortDir, setSortDir] = useState("desc");
+  const [selectedDay, setSelectedDay] = useState("current");
+  const [showCanceled, setShowCanceled] = useState(false);
+  const [closeModal, setCloseModal] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState("");
 
-  const totalRevenue = payments.reduce((a, p) => a + p.amount, 0);
-  const itemCount = payments.reduce((a, p) => a + p.items.length, 0);
+  // Overrides auf Payments anwenden
+  const applied = useMemo(() =>
+    payments.map((p) => {
+      const ov = overrides[p.id];
+      if (!ov) return { ...p, canceled: false };
+      return { ...p, label: ov.label ?? p.label, amount: ov.amount ?? p.amount, note: ov.note, canceled: ov.canceled ?? false };
+    }),
+  [payments, overrides]);
+
+  // Zeitgrenze des aktuellen Tages
+  const dayStartMs = dayStart ? new Date(dayStart).getTime() : 0;
+
+  // Zahlungen für die gewählte Tages-Ansicht
+  const viewPayments = useMemo(() => {
+    if (selectedDay === "all") return applied;
+    if (selectedDay === "current") return applied.filter((p) => !dayStart || p.ts >= dayStartMs);
+    const day = days.find((d) => d.id === selectedDay);
+    if (!day) return [];
+    const from = day.startedAt ? new Date(day.startedAt).getTime() : 0;
+    const to = new Date(day.closedAt).getTime();
+    return applied.filter((p) => p.ts >= from && p.ts < to);
+  }, [applied, selectedDay, days, dayStart, dayStartMs]);
+
+  const activeView = viewPayments.filter((p) => !p.canceled);
+  const visible = showCanceled ? viewPayments : activeView;
+
+  const totalRevenue = activeView.reduce((a, p) => a + p.amount, 0);
+  const itemCount = activeView.reduce((a, p) => a + p.items.length, 0);
+
+  // Für Tagesabschluss: nur aktive Buchungen des aktuellen Tages
+  const currentActive = applied.filter((p) => !p.canceled && (!dayStart || p.ts >= dayStartMs));
+
+  const setSort = (key) => {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "ts" || key === "amount" ? "desc" : "asc"); }
+  };
+  const arrow = (key) => (sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "");
 
   const sorted = useMemo(() => {
-    const arr = [...payments];
+    const arr = [...visible];
     const dir = sortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
       let av, bv;
@@ -790,73 +836,60 @@ function AdminPanel({ payments, onExit }) {
       return (av - bv) * dir;
     });
     return arr;
-  }, [payments, sortKey, sortDir]);
+  }, [visible, sortKey, sortDir]);
 
-  const setSort = (key) => {
-    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir(key === "ts" || key === "amount" ? "desc" : "asc"); }
-  };
-  const arrow = (key) => (sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "");
-
-  // Produkthäufigkeit über alle bezahlten Posten
   const productStats = useMemo(() => {
     const map = new Map();
-    payments.forEach((p) =>
+    activeView.forEach((p) =>
       p.items.forEach((it) => {
-        const key = it.name;
-        if (!map.has(key)) map.set(key, { name: it.name, kind: it.kind, qty: 0, revenue: 0 });
-        const row = map.get(key);
+        if (!map.has(it.name)) map.set(it.name, { name: it.name, kind: it.kind, qty: 0, revenue: 0 });
+        const row = map.get(it.name);
         row.qty += 1;
         row.revenue += it.price;
       })
     );
     return [...map.values()].sort((a, b) => b.qty - a.qty);
-  }, [payments]);
+  }, [activeView]);
 
   const exportExcel = async () => {
-    if (payments.length === 0) return;
-    setExporting(true);
-    setExportMsg("");
+    if (activeView.length === 0) return;
+    setExporting(true); setExportMsg("");
     try {
       const XLSX = await import("xlsx");
       const wb = XLSX.utils.book_new();
-
-      // Blatt 1: Produkte – wie oft bestellt (Hauptwunsch), absteigend
       const prodRows = productStats.map((r) => ({
-        Produkt: r.name,
-        Bereich: r.kind === "drink" ? "Getränk" : "Essen",
-        Anzahl: r.qty,
-        "Umsatz (EUR)": Number(r.revenue.toFixed(2)),
+        Produkt: r.name, Bereich: r.kind === "drink" ? "Getränk" : "Essen",
+        Anzahl: r.qty, "Umsatz (EUR)": Number(r.revenue.toFixed(2)),
       }));
       prodRows.push({ Produkt: "GESAMT", Bereich: "", Anzahl: productStats.reduce((a, r) => a + r.qty, 0), "Umsatz (EUR)": Number(totalRevenue.toFixed(2)) });
       const ws1 = XLSX.utils.json_to_sheet(prodRows);
       ws1["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 10 }, { wch: 14 }];
       XLSX.utils.book_append_sheet(wb, ws1, "Produkte");
-
-      // Blatt 2: Einzelne Buchungen (Beleg-Log)
-      const payRows = sorted.map((p) => ({
-        Zeit: new Date(p.ts).toLocaleString("de-DE"),
-        Tisch: p.tisch,
-        Bedienung: p.bedienung,
-        Rechnung: p.label,
-        "Betrag (EUR)": Number(p.amount.toFixed(2)),
-        "Erhalten (EUR)": Number(p.received.toFixed(2)),
-        "Rückgeld (EUR)": Number(p.change.toFixed(2)),
+      const payRows = sorted.filter((p) => !p.canceled).map((p) => ({
+        Zeit: new Date(p.ts).toLocaleString("de-DE"), Tisch: p.tisch, Bedienung: p.bedienung,
+        Rechnung: p.label, "Betrag (EUR)": Number(p.amount.toFixed(2)),
+        "Erhalten (EUR)": Number(p.received.toFixed(2)), "Rückgeld (EUR)": Number(p.change.toFixed(2)),
         Posten: p.items.map((i) => i.name + (i.options.length ? ` (${i.options.join("/")})` : "")).join(", "),
       }));
       const ws2 = XLSX.utils.json_to_sheet(payRows);
       ws2["!cols"] = [{ wch: 19 }, { wch: 6 }, { wch: 12 }, { wch: 22 }, { wch: 12 }, { wch: 13 }, { wch: 13 }, { wch: 50 }];
       XLSX.utils.book_append_sheet(wb, ws2, "Buchungen");
-
       const stamp = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
-      XLSX.writeFile(wb, `bestellungen_${stamp}.xlsx`);
+      const dayName = selectedDay === "current" ? "heute" : selectedDay === "all" ? "gesamt" : (days.find((d) => d.id === selectedDay)?.name || selectedDay);
+      XLSX.writeFile(wb, `schankwirt_${dayName}_${stamp}.xlsx`);
       setExportMsg("Export erstellt — Download gestartet.");
     } catch (e) {
       setExportMsg("Export fehlgeschlagen: " + (e?.message || "unbekannter Fehler"));
-    } finally {
-      setExporting(false);
-    }
+    } finally { setExporting(false); }
   };
+
+  const handleCloseDay = (name) => {
+    onCloseDay(name, currentActive);
+    setCloseModal(false);
+    setSelectedDay("current");
+  };
+
+  const selectedDayObj = days.find((d) => d.id === selectedDay);
 
   return (
     <div style={S.screen}>
@@ -865,95 +898,262 @@ function AdminPanel({ payments, onExit }) {
         center={<span style={{ ...S.displayTitle, color: amber }}>Admin · Auswertung</span>}
         right={
           <button
-            style={{ ...S.exportBtn, ...(payments.length === 0 || exporting ? S.disabled : {}) }}
-            className="lift" onClick={exportExcel} disabled={payments.length === 0 || exporting}>
+            style={{ ...S.exportBtn, ...(activeView.length === 0 || exporting ? S.disabled : {}) }}
+            className="lift" onClick={exportExcel} disabled={activeView.length === 0 || exporting}>
             ⬇ <span className="g-export-label">{exporting ? "Exportiere…" : "Excel-Export"}</span>
           </button>
         }
       />
       <div style={S.adminBody}>
+        {/* Tages-Tabs */}
+        <div style={S.dayBar}>
+          <button className="lift" style={{ ...S.dayChip, ...(selectedDay === "all" ? S.dayChipOn : {}) }} onClick={() => setSelectedDay("all")}>Gesamt</button>
+          {days.map((d) => (
+            <button key={d.id} className="lift"
+              style={{ ...S.dayChip, ...(selectedDay === d.id ? S.dayChipOn : {}) }}
+              onClick={() => setSelectedDay(d.id)}>
+              {d.name} · {euro(d.totalRevenue)}
+            </button>
+          ))}
+          <button className="lift"
+            style={{ ...S.dayChip, ...(selectedDay === "current" ? S.dayChipOn : {}), borderColor: green + "88", color: selectedDay === "current" ? ink : green }}
+            onClick={() => setSelectedDay("current")}>
+            Heute ●
+          </button>
+        </div>
+
         {/* Kennzahlen */}
         <div style={S.kpiRow}>
           <Kpi label="Umsatz" value={euro(totalRevenue)} />
-          <Kpi label="Buchungen" value={payments.length} />
+          <Kpi label="Buchungen" value={activeView.length} />
           <Kpi label="Verkaufte Posten" value={itemCount} />
-          <Kpi label="Verschiedene Produkte" value={productStats.length} />
+          <Kpi label="Produkte" value={productStats.length} />
         </div>
+
+        {/* Tag-abschließen-Leiste */}
+        {selectedDay === "current" && (
+          <div style={S.dayCloseBar}>
+            <div>
+              <div style={S.dayCloseTitle}>Aktueller Tag</div>
+              <div style={S.dayCloseSub}>{currentActive.length} Buchungen · {euro(currentActive.reduce((a, p) => a + p.amount, 0))} Umsatz</div>
+            </div>
+            <button
+              style={{ ...S.dayCloseBtn, ...(currentActive.length === 0 ? S.disabled : {}) }}
+              className="lift" onClick={() => setCloseModal(true)} disabled={currentActive.length === 0}>
+              Tag abschließen
+            </button>
+          </div>
+        )}
+
+        {/* Info-Zeile abgeschlossener Tag */}
+        {selectedDayObj && (
+          <div style={S.dayInfoBar}>
+            <strong>{selectedDayObj.name}</strong>
+            <span style={{ color: sub, fontSize: 13 }}>
+              {selectedDayObj.paymentCount} Buchungen · Abgeschlossen {new Date(selectedDayObj.closedAt).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+        )}
+
         {exportMsg && <div style={S.exportMsg}>{exportMsg}</div>}
 
-        {payments.length === 0 ? (
+        {applied.length === 0 && days.length === 0 ? (
           <div style={S.emptyDisplay}>
             <span style={S.emptyBig}>🧾</span>
             <p>Noch keine bezahlten Bestellungen. Sobald an einem Tisch kassiert wurde, erscheinen die Buchungen hier.</p>
           </div>
         ) : (
           <div style={S.adminGrid} className="g-admin-grid">
-            {/* Buchungen, sortierbar */}
+            {/* Buchungen */}
             <div style={S.adminCard}>
               <div style={S.adminCardHead}>
-                <h3 style={S.adminH3}>Alle Buchungen</h3>
+                <h3 style={S.adminH3}>Buchungen</h3>
                 <div style={S.sortBar}>
                   <span style={S.sortLabel}>Sortieren:</span>
-                  <button className="lift" style={{ ...S.sortChip, ...(sortKey === "ts" ? S.sortChipOn : {}) }} onClick={() => setSort("ts")}>Bestellung{arrow("ts")}</button>
+                  <button className="lift" style={{ ...S.sortChip, ...(sortKey === "ts" ? S.sortChipOn : {}) }} onClick={() => setSort("ts")}>Zeit{arrow("ts")}</button>
                   <button className="lift" style={{ ...S.sortChip, ...(sortKey === "tisch" ? S.sortChipOn : {}) }} onClick={() => setSort("tisch")}>Tisch{arrow("tisch")}</button>
-                  <button className="lift" style={{ ...S.sortChip, ...(sortKey === "bedienung" ? S.sortChipOn : {}) }} onClick={() => setSort("bedienung")}>Bedienung{arrow("bedienung")}</button>
                   <button className="lift" style={{ ...S.sortChip, ...(sortKey === "amount" ? S.sortChipOn : {}) }} onClick={() => setSort("amount")}>Betrag{arrow("amount")}</button>
+                  <button className="lift" style={{ ...S.sortChip, ...(showCanceled ? { background: "#3d1515", color: "#ef4444", borderColor: "#ef444455" } : {}) }}
+                    onClick={() => setShowCanceled((s) => !s)}>
+                    {showCanceled ? "Stornos ausblenden" : "Stornos anzeigen"}
+                  </button>
                 </div>
               </div>
-              <div style={S.tableScroll}>
-                <table style={S.table} className="g-admin-table">
-                  <thead>
-                    <tr>
-                      <th style={S.th}>Zeit</th>
-                      <th style={S.th}>Tisch</th>
-                      <th style={S.th}>Bedienung</th>
-                      <th style={S.th}>Rechnung</th>
-                      <th style={{ ...S.th, textAlign: "right" }}>Betrag</th>
-                      <th style={{ ...S.th, textAlign: "right" }}>Rückgeld</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sorted.map((p) => (
-                      <tr key={p.id} style={S.tr}>
-                        <td style={S.td} data-label="Zeit">{new Date(p.ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</td>
-                        <td style={S.td} data-label="Tisch"><span style={S.tischChip}>{p.tisch}</span></td>
-                        <td style={S.td} data-label="Bedienung">{p.bedienung}</td>
-                        <td style={{ ...S.td, color: sub }} data-label="Rechnung" className="g-col-full">{p.label}</td>
-                        <td style={{ ...S.td, textAlign: "right", fontWeight: 700 }} data-label="Betrag">{euro(p.amount)}</td>
-                        <td style={{ ...S.td, textAlign: "right", color: sub }} data-label="Rückgeld">{euro(p.change)}</td>
+              {visible.length === 0 ? (
+                <p style={{ color: sub, fontSize: 14, padding: "12px 4px" }}>Keine Buchungen für diesen Zeitraum.</p>
+              ) : (
+                <div style={S.tableScroll}>
+                  <table style={S.table} className="g-admin-table">
+                    <thead>
+                      <tr>
+                        <th style={S.th}>Zeit</th>
+                        <th style={S.th}>Tisch</th>
+                        <th style={S.th}>Bedienung</th>
+                        <th style={S.th}>Rechnung</th>
+                        <th style={{ ...S.th, textAlign: "right" }}>Betrag</th>
+                        <th style={{ ...S.th, textAlign: "right" }}>Rückgeld</th>
+                        <th style={S.th} />
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {sorted.map((p) => (
+                        <tr key={p.id} style={{ ...S.tr, ...(p.canceled ? S.canceledRow : {}) }}>
+                          <td style={S.td} data-label="Zeit">{new Date(p.ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</td>
+                          <td style={S.td} data-label="Tisch"><span style={S.tischChip}>{p.tisch}</span></td>
+                          <td style={S.td} data-label="Bedienung">{p.bedienung}</td>
+                          <td style={{ ...S.td, color: sub }} data-label="Rechnung" className="g-col-full">
+                            <span style={p.canceled ? S.canceledText : {}}>{p.label}</span>
+                            {p.canceled && <span style={S.stornoBadge}>Storniert</span>}
+                            {p.note && !p.canceled && <span style={{ fontSize: 11, color: amber, marginLeft: 6 }}>✎ {p.note}</span>}
+                          </td>
+                          <td style={{ ...S.td, textAlign: "right", fontWeight: 700, ...(p.canceled ? S.canceledText : {}) }} data-label="Betrag">{euro(p.amount)}</td>
+                          <td style={{ ...S.td, textAlign: "right", color: sub }} data-label="Rückgeld">{euro(p.change)}</td>
+                          <td style={{ ...S.td, whiteSpace: "nowrap" }} data-label="Aktionen" className="g-col-full">
+                            {!p.canceled ? (
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button className="lift" style={S.actionBtn} onClick={() => setEditTarget(p)}>Bearbeiten</button>
+                                <button className="lift" style={{ ...S.actionBtn, ...S.stornoBtn }} onClick={() => onOverride(p.id, { canceled: true })}>Stornieren</button>
+                              </div>
+                            ) : (
+                              <button className="lift" style={{ ...S.actionBtn, ...S.restoreBtn }} onClick={() => onClearOverride(p.id)}>Wiederherstellen</button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             {/* Produkt-Ranking */}
             <div style={S.adminCard}>
               <h3 style={S.adminH3}>Produkte · wie oft bestellt</h3>
-              <div style={S.rankList}>
-                {productStats.map((r, idx) => {
-                  const max = productStats[0].qty || 1;
-                  return (
-                    <div key={r.name} style={S.rankRow}>
-                      <span style={S.rankNo}>{idx + 1}</span>
-                      <div style={S.rankMain}>
-                        <div style={S.rankTop}>
-                          <span style={S.rankName}>{r.name}</span>
-                          <span style={S.rankQty}>{r.qty}×</span>
+              {productStats.length === 0 ? (
+                <p style={{ color: sub, fontSize: 14 }}>Keine Daten für diesen Zeitraum.</p>
+              ) : (
+                <div style={S.rankList}>
+                  {productStats.map((r, idx) => {
+                    const max = productStats[0].qty || 1;
+                    return (
+                      <div key={r.name} style={S.rankRow}>
+                        <span style={S.rankNo}>{idx + 1}</span>
+                        <div style={S.rankMain}>
+                          <div style={S.rankTop}>
+                            <span style={S.rankName}>{r.name}</span>
+                            <span style={S.rankQty}>{r.qty}×</span>
+                          </div>
+                          <div style={S.rankBarTrack}>
+                            <div style={{ ...S.rankBarFill, width: `${(r.qty / max) * 100}%`, background: r.kind === "drink" ? amber : "#d8694a" }} />
+                          </div>
+                          <span style={S.rankRev}>{euro(r.revenue)}</span>
                         </div>
-                        <div style={S.rankBarTrack}>
-                          <div style={{ ...S.rankBarFill, width: `${(r.qty / max) * 100}%`, background: r.kind === "drink" ? amber : "#d8694a" }} />
-                        </div>
-                        <span style={S.rankRev}>{euro(r.revenue)}</span>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}
+      </div>
+
+      {closeModal && (
+        <DayCloseModal
+          paymentCount={currentActive.length}
+          totalRevenue={currentActive.reduce((a, p) => a + p.amount, 0)}
+          onConfirm={handleCloseDay}
+          onCancel={() => setCloseModal(false)}
+        />
+      )}
+
+      {editTarget && (
+        <PaymentEditModal
+          payment={editTarget}
+          onSave={(patch) => { onOverride(editTarget.id, patch); setEditTarget(null); }}
+          onCancel={() => setEditTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DayCloseModal({ paymentCount, totalRevenue, onConfirm, onCancel }) {
+  const [name, setName] = useState("");
+  const [err, setErr] = useState("");
+  const submit = () => {
+    if (!name.trim()) { setErr("Bitte einen Namen eingeben (z. B. Samstag)."); return; }
+    onConfirm(name.trim());
+  };
+  return (
+    <div style={S.overlay} className="g-overlay" onClick={onCancel}>
+      <div style={S.modal} className="g-modal" onClick={(e) => e.stopPropagation()}>
+        <h3 style={S.modalTitle}>Tag abschließen</h3>
+        <p style={S.modalSub}>Alle aktiven Buchungen werden diesem Tag zugeordnet.</p>
+        <div style={S.dayCloseSummary}>
+          <div style={S.dayCloseSummaryRow}><span>Buchungen</span><strong>{paymentCount}</strong></div>
+          <div style={S.dayCloseSummaryRow}><span>Umsatz</span><strong style={{ color: amber, fontSize: 20, fontFamily: "Fraunces, serif" }}>{euro(totalRevenue)}</strong></div>
+        </div>
+        <label style={{ fontSize: 13, color: sub, display: "block", marginBottom: 6 }}>Tagesname</label>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => { setName(e.target.value); setErr(""); }}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="z. B. Samstag"
+          style={{ ...S.tischInput, fontSize: 20, padding: "12px 14px", textAlign: "left", marginBottom: 4 }}
+        />
+        {err && <div style={{ ...S.errText, textAlign: "left", marginBottom: 8 }}>{err}</div>}
+        <div style={{ ...S.modalBtns, marginTop: 14 }} className="g-modal-btns">
+          <button style={S.modalGhost} className="lift" onClick={onCancel}>Abbrechen</button>
+          <button style={{ ...S.modalPrimary, background: "#c53030", color: "#fecaca" }} className="lift" onClick={submit}>
+            Abschließen
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PaymentEditModal({ payment, onSave, onCancel }) {
+  const [label, setLabel] = useState(payment.label);
+  const [amountStr, setAmountStr] = useState(payment.amount.toFixed(2).replace(".", ","));
+  const [note, setNote] = useState(payment.note || "");
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    const amount = parseFloat(amountStr.replace(",", "."));
+    if (isNaN(amount) || amount <= 0) { setErr("Ungültiger Betrag."); return; }
+    onSave({ label: label.trim() || payment.label, amount, note: note.trim() || undefined });
+  };
+
+  return (
+    <div style={S.overlay} className="g-overlay" onClick={onCancel}>
+      <div style={S.modal} className="g-modal" onClick={(e) => e.stopPropagation()}>
+        <h3 style={S.modalTitle}>Buchung bearbeiten</h3>
+        <p style={S.modalSub}>Tisch {payment.tisch} · {new Date(payment.ts).toLocaleString("de-DE", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 13, color: sub, display: "block", marginBottom: 4 }}>Bezeichnung</label>
+            <input value={label} onChange={(e) => setLabel(e.target.value)}
+              style={{ ...S.tischInput, fontSize: 16, padding: "10px 12px", textAlign: "left" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 13, color: sub, display: "block", marginBottom: 4 }}>Betrag (€)</label>
+            <input value={amountStr} onChange={(e) => { setAmountStr(e.target.value); setErr(""); }}
+              style={{ ...S.tischInput, fontSize: 22, padding: "10px 12px", textAlign: "right" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 13, color: sub, display: "block", marginBottom: 4 }}>Notiz (optional)</label>
+            <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Grund der Änderung…"
+              style={{ ...S.tischInput, fontSize: 14, padding: "10px 12px", textAlign: "left" }} />
+          </div>
+        </div>
+        {err && <div style={{ ...S.errText, marginTop: 6 }}>{err}</div>}
+        <div style={{ ...S.modalBtns, marginTop: 16 }} className="g-modal-btns">
+          <button style={S.modalGhost} className="lift" onClick={onCancel}>Abbrechen</button>
+          <button style={S.modalPrimary} className="lift" onClick={submit}>Speichern</button>
+        </div>
       </div>
     </div>
   );
@@ -1355,6 +1555,26 @@ const S = {
   changeWait: { background: panel2, border: `1px solid ${line}`, color: sub },
   changeOk: { background: "#13301f", border: `1px solid ${green}`, color: green },
   changeBig: { fontSize: 24, fontFamily: "Fraunces, serif" },
+
+  /* Tagesabschluss */
+  dayBar: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
+  dayChip: { background: panel2, border: `1px solid ${line}`, color: sub, borderRadius: 999, padding: "8px 16px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" },
+  dayChipOn: { background: amber, color: ink, borderColor: amber },
+  dayCloseBar: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "#1a1210", border: `1px solid #c5303044`, borderRadius: 14, padding: "14px 18px", marginBottom: 14, gap: 12, flexWrap: "wrap" },
+  dayCloseTitle: { fontWeight: 700, fontSize: 15, marginBottom: 2 },
+  dayCloseSub: { fontSize: 13, color: sub },
+  dayCloseBtn: { background: "#c53030", color: "#fecaca", fontWeight: 700, borderRadius: 10, padding: "10px 18px", fontSize: 14, border: "none", whiteSpace: "nowrap" },
+  dayInfoBar: { display: "flex", alignItems: "center", justifyContent: "space-between", background: panel2, border: `1px solid ${line}`, borderRadius: 12, padding: "10px 16px", marginBottom: 14, gap: 8, flexWrap: "wrap" },
+  dayCloseSummary: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 8 },
+  dayCloseSummaryRow: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14 },
+
+  /* Buchungs-Aktionen */
+  canceledRow: { opacity: 0.5 },
+  canceledText: { textDecoration: "line-through", color: sub },
+  stornoBadge: { marginLeft: 8, fontSize: 11, background: "#3d1515", color: "#ef4444", borderRadius: 6, padding: "2px 7px", fontWeight: 700, verticalAlign: "middle" },
+  actionBtn: { padding: "5px 10px", borderRadius: 8, fontSize: 12, fontWeight: 700, border: `1px solid ${line}`, background: panel2, color: sub },
+  stornoBtn: { color: "#ef4444", borderColor: "#ef444455", background: "#2a1010" },
+  restoreBtn: { color: green, borderColor: green + "55", background: "#0d2018" },
 
   /* Admin */
   exportBtn: { background: green, color: "#06281c", fontWeight: 800, fontSize: 14, padding: "10px 16px", borderRadius: 10 },
