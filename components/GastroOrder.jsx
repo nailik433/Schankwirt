@@ -332,7 +332,7 @@ function OrderTaker({ tisch, user, db, onBack, onBill }) {
   const visible = KARTE.filter((k) => k.cat === activeCat);
 
   return (
-    <div style={S.orderLayout}>
+    <div style={S.orderLayout} className="g-order-layout">
       {/* Menü */}
       <div style={S.menuPane}>
         <div style={S.menuHead}>
@@ -367,7 +367,7 @@ function OrderTaker({ tisch, user, db, onBack, onBill }) {
       </div>
 
       {/* Warenkorb */}
-      <div style={S.cartPane}>
+      <div style={S.cartPane} className="g-cart-pane">
         <h3 style={S.cartTitle}>Aktuelle Bestellung</h3>
         {existing.length > 0 && (
           <div style={S.alreadyBox}>
@@ -426,8 +426,8 @@ function OptionPicker({ item, onCancel, onConfirm }) {
   const [chosen, setChosen] = useState([]);
   const toggle = (o) => setChosen((c) => (c.includes(o) ? c.filter((x) => x !== o) : [...c, o]));
   return (
-    <div style={S.overlay} onClick={onCancel}>
-      <div style={S.modal} onClick={(e) => e.stopPropagation()}>
+    <div style={S.overlay} className="g-overlay" onClick={onCancel}>
+      <div style={S.modal} className="g-modal" onClick={(e) => e.stopPropagation()}>
         <h3 style={S.modalTitle}>{item.name}</h3>
         <p style={S.modalSub}>Beilagen ankreuzen (ohne Aufpreis)</p>
         <div style={S.optList}>
@@ -497,10 +497,10 @@ function BillView({ tisch, db, user, onBack }) {
 
   return (
     <div style={S.body}>
-      <div style={S.billHead}>
+      <div style={S.billHead} className="g-bill-head">
         <button style={S.iconBtn} className="lift" onClick={onBack}>← Weiter bestellen</button>
         <h2 style={S.h2}>Rechnung · Tisch {tisch}</h2>
-        <div style={{ width: 150 }} />
+        <div style={{ width: 150 }} className="g-bill-spacer" />
       </div>
 
       {open.length === 0 ? (
@@ -509,7 +509,7 @@ function BillView({ tisch, db, user, onBack }) {
           <p>Alles kassiert. Tisch {tisch} ist offen für neue Gäste.</p>
         </div>
       ) : (
-        <div style={S.billLayout}>
+        <div style={S.billLayout} className="g-bill-layout">
           {/* Posten */}
           <div style={S.billItems}>
             <div style={S.modeBar}>
@@ -555,7 +555,7 @@ function BillView({ tisch, db, user, onBack }) {
           </div>
 
           {/* Kassieren */}
-          <div style={S.billSummary}>
+          <div style={S.billSummary} className="g-bill-summary">
             <div style={S.sumRow}><span>Offen gesamt</span><strong>{euro(openSum)}</strong></div>
 
             {mode === "full" && (
@@ -640,8 +640,8 @@ function PayPad({ amount, label, onCancel, onConfirm }) {
   };
 
   return (
-    <div style={S.overlay} onClick={onCancel}>
-      <div style={{ ...S.modal, maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+    <div style={S.overlay} className="g-overlay" onClick={onCancel}>
+      <div style={{ ...S.modal, maxWidth: 420 }} className="g-modal" onClick={(e) => e.stopPropagation()}>
         <h3 style={S.modalTitle}>Kassieren</h3>
         <p style={S.modalSub}>{label}</p>
 
@@ -655,7 +655,7 @@ function PayPad({ amount, label, onCancel, onConfirm }) {
           <span style={S.payFieldValue}>{entry === "" ? "0,00" : entry} €</span>
         </div>
 
-        <div style={S.quickRow}>
+        <div style={S.quickRow} className="g-quick-row">
           {quick.map((q) => (
             <button key={q} className="lift" style={S.quickBtn}
               onClick={() => setEntry(formatEntry(q))}>
@@ -668,20 +668,20 @@ function PayPad({ amount, label, onCancel, onConfirm }) {
           </button>
         </div>
 
-        <div style={S.payGrid}>
+        <div style={S.payGrid} className="g-pay-grid">
           {["1","2","3","4","5","6","7","8","9",",","0","⌫"].map((k) => (
-            <button key={k} className="lift" style={S.payKey} onClick={() => press(k)}>{k}</button>
+            <button key={k} className="lift g-pay-key" style={S.payKey} onClick={() => press(k)}>{k}</button>
           ))}
         </div>
 
-        <div style={{ ...S.changeBox, ...(enough ? S.changeOk : S.changeWait) }}>
+        <div style={{ ...S.changeBox, ...(enough ? S.changeOk : S.changeWait) }} className="g-change-box">
           <span>Rückgeld</span>
           <strong style={S.changeBig}>
             {entry === "" ? "—" : change >= 0 ? euro(change) : `fehlen ${euro(-change)}`}
           </strong>
         </div>
 
-        <div style={S.modalBtns}>
+        <div style={S.modalBtns} className="g-modal-btns">
           <button style={S.modalGhost} className="lift" onClick={onCancel}>Abbrechen</button>
           <button
             style={{ ...S.modalPrimary, ...(enough ? {} : S.disabled) }}
@@ -887,7 +887,7 @@ function AdminPanel({ payments, onExit }) {
             <p>Noch keine bezahlten Bestellungen. Sobald an einem Tisch kassiert wurde, erscheinen die Buchungen hier.</p>
           </div>
         ) : (
-          <div style={S.adminGrid}>
+          <div style={S.adminGrid} className="g-admin-grid">
             {/* Buchungen, sortierbar */}
             <div style={S.adminCard}>
               <div style={S.adminCardHead}>
@@ -1075,6 +1075,60 @@ function StyleTag() {
       ::-webkit-scrollbar { width: 10px; height: 10px; }
       ::-webkit-scrollbar-thumb { background: #2c3340; border-radius: 6px; }
       @media (prefers-reduced-motion: reduce){ .lift{ transition:none; } }
+
+      /* ── Mobile ─────────────────────────────────────────────── */
+      @media (max-width: 640px) {
+        /* Overlay → Bottom Sheet */
+        .g-overlay {
+          display: flex !important;
+          flex-direction: column !important;
+          justify-content: flex-end !important;
+          align-items: stretch !important;
+          padding: 0 !important;
+        }
+        .g-modal {
+          border-radius: 20px 20px 0 0 !important;
+          max-height: 90svh;
+          overflow-y: auto;
+          width: 100% !important;
+          max-width: 100% !important;
+          padding: 20px 16px max(env(safe-area-inset-bottom), 24px) !important;
+        }
+        .g-modal::before {
+          content: '';
+          display: block;
+          width: 36px;
+          height: 4px;
+          background: #3a4350;
+          border-radius: 2px;
+          margin: 0 auto 18px;
+        }
+
+        /* PayPad — tightened numpad */
+        .g-pay-grid  { gap: 6px !important; margin-top: 8px !important; }
+        .g-pay-key   { padding: 11px 0 !important; font-size: 18px !important; }
+        .g-quick-row { margin-top: 8px !important; gap: 6px !important; }
+        .g-change-box { margin-top: 8px !important; padding: 10px 12px !important; }
+        .g-modal-btns { margin-top: 12px !important; }
+
+        /* OrderTaker → single column */
+        .g-order-layout { grid-template-columns: 1fr !important; }
+        .g-cart-pane {
+          max-height: 320px !important;
+          border-left: none !important;
+          border-top: 1px solid #2a323d;
+          max-height: calc(100svh - 57px);
+        }
+
+        /* BillView → stacked */
+        .g-bill-layout  { grid-template-columns: 1fr !important; }
+        .g-bill-summary { position: static !important; }
+        .g-bill-spacer  { display: none !important; }
+        .g-bill-head    { flex-wrap: wrap; gap: 8px; }
+
+        /* Admin → stacked */
+        .g-admin-grid { grid-template-columns: 1fr !important; }
+      }
     `}</style>
   );
 }
