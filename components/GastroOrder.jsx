@@ -867,7 +867,7 @@ function AdminPanel({ payments, onExit }) {
           <button
             style={{ ...S.exportBtn, ...(payments.length === 0 || exporting ? S.disabled : {}) }}
             className="lift" onClick={exportExcel} disabled={payments.length === 0 || exporting}>
-            {exporting ? "Exportiere…" : "⬇ Excel-Export"}
+            ⬇ <span className="g-export-label">{exporting ? "Exportiere…" : "Excel-Export"}</span>
           </button>
         }
       />
@@ -901,7 +901,7 @@ function AdminPanel({ payments, onExit }) {
                 </div>
               </div>
               <div style={S.tableScroll}>
-                <table style={S.table}>
+                <table style={S.table} className="g-admin-table">
                   <thead>
                     <tr>
                       <th style={S.th}>Zeit</th>
@@ -915,12 +915,12 @@ function AdminPanel({ payments, onExit }) {
                   <tbody>
                     {sorted.map((p) => (
                       <tr key={p.id} style={S.tr}>
-                        <td style={S.td}>{new Date(p.ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</td>
-                        <td style={S.td}><span style={S.tischChip}>{p.tisch}</span></td>
-                        <td style={S.td}>{p.bedienung}</td>
-                        <td style={{ ...S.td, color: sub }}>{p.label}</td>
-                        <td style={{ ...S.td, textAlign: "right", fontWeight: 700 }}>{euro(p.amount)}</td>
-                        <td style={{ ...S.td, textAlign: "right", color: sub }}>{euro(p.change)}</td>
+                        <td style={S.td} data-label="Zeit">{new Date(p.ts).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</td>
+                        <td style={S.td} data-label="Tisch"><span style={S.tischChip}>{p.tisch}</span></td>
+                        <td style={S.td} data-label="Bedienung">{p.bedienung}</td>
+                        <td style={{ ...S.td, color: sub }} data-label="Rechnung" className="g-col-full">{p.label}</td>
+                        <td style={{ ...S.td, textAlign: "right", fontWeight: 700 }} data-label="Betrag">{euro(p.amount)}</td>
+                        <td style={{ ...S.td, textAlign: "right", color: sub }} data-label="Rückgeld">{euro(p.change)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1128,6 +1128,42 @@ function StyleTag() {
 
         /* Admin → stacked */
         .g-admin-grid { grid-template-columns: 1fr !important; }
+
+        /* Export-Button: nur Icon auf Mobile */
+        .g-export-label { display: none; }
+
+        /* Buchungen-Tabelle → Karten auf Mobile */
+        .g-admin-table { display: block; width: 100%; }
+        .g-admin-table thead { display: none; }
+        .g-admin-table tbody { display: block; }
+        .g-admin-table tr {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 6px 10px;
+          background: #1c232d;
+          border: 1px solid #2a323d;
+          border-radius: 12px;
+          padding: 12px;
+          margin-bottom: 8px;
+        }
+        .g-admin-table td {
+          display: flex;
+          flex-direction: column;
+          padding: 0;
+          border: none;
+          text-align: left !important;
+          font-size: 13.5px;
+        }
+        .g-admin-table td::before {
+          content: attr(data-label);
+          font-size: 10px;
+          color: #8b97a6;
+          text-transform: uppercase;
+          letter-spacing: .05em;
+          font-weight: 600;
+          margin-bottom: 2px;
+        }
+        .g-admin-table td.g-col-full { grid-column: 1 / -1; }
       }
     `}</style>
   );
