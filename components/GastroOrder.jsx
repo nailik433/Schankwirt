@@ -1,7 +1,7 @@
 "use client";
 
-import { useStaff, useTables, useTickets, usePayments, submitOrder, settlePayment, hasSupabase, useDays, usePaymentOverrides } from "@/lib/data";
-import React, { useState, useEffect, useMemo } from "react";
+import { useStaff, useTables, useTickets, usePayments, submitOrder, settlePayment, hasSupabase, useDays, usePaymentOverrides, addStaff, removeStaff } from "@/lib/data";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 
 /* ============================================================================
    GASTRO ORDER — Demo
@@ -45,21 +45,55 @@ const CAT_ORDER = ["Alkoholfrei", "Bier", "Wein", "Essen"];
 const euro = (n) => n.toLocaleString("de-DE", { style: "currency", currency: "EUR" });
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+const _lsGet = (k, fb) => { if (typeof window === "undefined") return fb; try { return JSON.parse(localStorage.getItem(k)) ?? fb; } catch { return fb; } };
+const _lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+function useKarte() {
+  const [items, setItems] = useState(null);
+  useEffect(() => {
+    const saved = _lsGet("sw_karte", null);
+    if (saved && saved.length > 0) setItems(saved);
+  }, []);
+  const karte = items ?? KARTE;
+  const saveItem = useCallback((item) => {
+    setItems((prev) => {
+      const base = prev ?? KARTE;
+      const idx = base.findIndex((k) => k.id === item.id);
+      const next = idx >= 0 ? base.map((k, i) => (i === idx ? item : k)) : [...base, item];
+      _lsSet("sw_karte", next);
+      return next;
+    });
+  }, []);
+  const deleteItem = useCallback((id) => {
+    setItems((prev) => {
+      const next = (prev ?? KARTE).filter((k) => k.id !== id);
+      _lsSet("sw_karte", next);
+      return next;
+    });
+  }, []);
+  const reset = useCallback(() => {
+    try { localStorage.removeItem("sw_karte"); } catch {}
+    setItems(null);
+  }, []);
+  return { karte, saveItem, deleteItem, reset };
+}
+
 /* ============================================================================
    APP
    ============================================================================ */
 export default function App() {
   const [role, setRole] = useState(null); // "bedienung" | "theke" | "kueche" | "admin"
+  const karteCtx = useKarte();
 
   return (
     <div style={S.appWrap}>
       <StyleTag />
       {!hasSupabase && <ConfigWarning />}
       {!role && <RolePicker onPick={setRole} />}
-      {role === "bedienung" && <Bedienung onExit={() => setRole(null)} />}
+      {role === "bedienung" && <Bedienung onExit={() => setRole(null)} karte={karteCtx.karte} />}
       {role === "theke" && <Display kind="drink" onExit={() => setRole(null)} />}
       {role === "kueche" && <Display kind="food" onExit={() => setRole(null)} />}
-      {role === "admin" && <Admin onExit={() => setRole(null)} />}
+      {role === "admin" && <Admin onExit={() => setRole(null)} karteCtx={karteCtx} />}
     </div>
   );
 }
@@ -82,9 +116,9 @@ function RolePicker({ onPick }) {
   return (
     <div style={S.center}>
       <div style={S.brandBlock}>
-        <div style={S.brandMark}>◐</div>
-        <h1 style={S.brandName}>Schankwirt</h1>
-        <p style={S.brandSub}>Bestell-Terminal für Fest &amp; Gastronomie</p>
+        <div style={S.brandMark}>🎣</div>
+        <h1 style={S.brandName}>Anglerhock 2026</h1>
+        <p style={S.brandSub}>Bestell-Terminal für den Anglerhock 2026</p>
       </div>
       <div style={S.roleGrid}>
         <RoleCard label="Bedienung" hint="Bestellungen pro Tisch aufnehmen" icon="🧾" onClick={() => onPick("bedienung")} />
@@ -113,7 +147,7 @@ function RoleCard({ label, hint, icon, onClick }) {
    BEDIENUNG (Tablet)
    Login -> Tischübersicht -> Bestellung aufnehmen -> abschicken -> Rechnung/Split
    ============================================================================ */
-function Bedienung({ onExit }) {
+function Bedienung({ onExit, karte }) {
   const [user, setUser] = useState(null);
   const [view, setView] = useState({ name: "tables" }); // tables | order | bill
   const { db } = useTables();
@@ -138,6 +172,7 @@ function Bedienung({ onExit }) {
           tisch={view.tisch}
           user={user}
           db={db}
+          karte={karte}
           onBack={() => setView({ name: "tables" })}
           onBill={() => showBill(view.tisch)}
         />
@@ -288,7 +323,7 @@ function TableOverview({ db, onOpen, onBill }) {
 }
 
 /* ---------- Bestellung aufnehmen ---------- */
-function OrderTaker({ tisch, user, db, onBack, onBill }) {
+function OrderTaker({ tisch, user, db, karte: karteProp, onBack, onBill }) {
   const [cart, setCart] = useState([]); // {lineId, item, qty, options:[]}
   const [activeCat, setActiveCat] = useState("Alkoholfrei");
   const [optFor, setOptFor] = useState(null); // Item, für das gerade Beilagen gewählt werden
@@ -345,7 +380,9 @@ function OrderTaker({ tisch, user, db, onBack, onBill }) {
     }
   };
 
-  const visible = KARTE.filter((k) => k.cat === activeCat);
+  const karte = karteProp ?? KARTE;
+  const catOrder = [...new Set(karte.map((k) => k.cat))];
+  const visible = karte.filter((k) => k.cat === activeCat);
 
   return (
     <div style={S.orderLayout} className="g-order-layout">
@@ -357,7 +394,7 @@ function OrderTaker({ tisch, user, db, onBack, onBill }) {
           <div style={{ width: 96 }} />
         </div>
         <div style={S.catBar}>
-          {CAT_ORDER.map((c) => (
+          {catOrder.map((c) => (
             <button
               key={c}
               className="lift"
@@ -741,21 +778,24 @@ function groupItems(items) {
 /* ============================================================================
    ADMIN — Auswertung aller Buchungen + Excel-Export
    ============================================================================ */
-function Admin({ onExit }) {
+function Admin({ onExit, karteCtx }) {
   const [authed, setAuthed] = useState(false);
   if (!authed) return <AdminLogin onOk={() => setAuthed(true)} onExit={onExit} />;
-  return <AdminPanelLive onExit={onExit} />;
+  return <AdminPanelLive onExit={onExit} karteCtx={karteCtx} />;
 }
 
-function AdminPanelLive({ onExit }) {
+function AdminPanelLive({ onExit, karteCtx }) {
   const { payments } = usePayments();
   const { days, dayStart, closeDay } = useDays();
   const { overrides, applyOverride, clearOverride } = usePaymentOverrides();
+  const { staff, reload: reloadStaff } = useStaff();
   return (
     <AdminPanel
       payments={payments} days={days} dayStart={dayStart} onCloseDay={closeDay}
       overrides={overrides} onOverride={applyOverride} onClearOverride={clearOverride}
       onExit={onExit}
+      staff={staff} onReloadStaff={reloadStaff}
+      karteCtx={karteCtx}
     />
   );
 }
@@ -791,7 +831,8 @@ function AdminLogin({ onOk, onExit }) {
   );
 }
 
-function AdminPanel({ payments, days, dayStart, onCloseDay, overrides, onOverride, onClearOverride, onExit }) {
+function AdminPanel({ payments, days, dayStart, onCloseDay, overrides, onOverride, onClearOverride, onExit, staff, onReloadStaff, karteCtx }) {
+  const [tab, setTab] = useState("auswertung");
   const [sortKey, setSortKey] = useState("ts");
   const [sortDir, setSortDir] = useState("desc");
   const [selectedDay, setSelectedDay] = useState("current");
@@ -911,16 +952,30 @@ function AdminPanel({ payments, days, dayStart, onCloseDay, overrides, onOverrid
     <div style={S.screen}>
       <TopBar
         left={<button style={S.iconBtn} className="lift" onClick={onExit}>← Rolle wechseln</button>}
-        center={<span style={{ ...S.displayTitle, color: amber }}>Admin · Auswertung</span>}
-        right={
+        center={<span style={{ ...S.displayTitle, color: amber }}>Admin</span>}
+        right={tab === "auswertung" ? (
           <button
             style={{ ...S.exportBtn, ...(activeView.length === 0 || exporting ? S.disabled : {}) }}
             className="lift" onClick={exportExcel} disabled={activeView.length === 0 || exporting}>
             ⬇ <span className="g-export-label">{exporting ? "Exportiere…" : "Excel-Export"}</span>
           </button>
-        }
+        ) : null}
       />
       <div style={S.adminBody}>
+        {/* Admin-Tabs */}
+        <div style={S.adminTabBar}>
+          {["auswertung", "bedienungen", "speisekarte"].map((t) => (
+            <button key={t} className="lift" style={{ ...S.adminTab, ...(tab === t ? S.adminTabOn : {}) }} onClick={() => setTab(t)}>
+              {t === "auswertung" ? "Auswertung" : t === "bedienungen" ? "Bedienungen" : "Speisekarte"}
+            </button>
+          ))}
+        </div>
+
+        {tab === "bedienungen" && <AdminBedienungen staff={staff ?? []} onReload={onReloadStaff} />}
+        {tab === "speisekarte" && karteCtx && (
+          <AdminKarte karte={karteCtx.karte} onSave={karteCtx.saveItem} onDelete={karteCtx.deleteItem} onReset={karteCtx.reset} />
+        )}
+        {tab !== "auswertung" ? null : <>
         {/* Tages-Tabs */}
         <div style={S.dayBar}>
           <button className="lift" style={{ ...S.dayChip, ...(selectedDay === "all" ? S.dayChipOn : {}) }} onClick={() => setSelectedDay("all")}>Gesamt</button>
@@ -1072,6 +1127,7 @@ function AdminPanel({ payments, days, dayStart, onCloseDay, overrides, onOverrid
             </div>
           </div>
         )}
+        </>}
       </div>
 
       {closeModal && (
@@ -1090,6 +1146,200 @@ function AdminPanel({ payments, days, dayStart, onCloseDay, overrides, onOverrid
           onCancel={() => setEditTarget(null)}
         />
       )}
+    </div>
+  );
+}
+
+function AdminBedienungen({ staff, onReload }) {
+  const [showAdd, setShowAdd] = useState(false);
+
+  const handleAdd = async ({ name, pin }) => {
+    await addStaff({ name, pin });
+    await onReload?.();
+    setShowAdd(false);
+  };
+
+  const handleRemove = async (s) => {
+    if (!confirm(`"${s.name}" wirklich entfernen?`)) return;
+    await removeStaff(s.id);
+    await onReload?.();
+  };
+
+  return (
+    <div style={S.adminCard}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h3 style={S.adminH3}>Bedienungen</h3>
+        <button style={S.addBtn} className="lift" onClick={() => setShowAdd(true)}>+ Hinzufügen</button>
+      </div>
+      {staff.length === 0 && <p style={{ color: sub, fontSize: 14, padding: "8px 0" }}>Noch keine Bedienungen konfiguriert.</p>}
+      {staff.map((s) => (
+        <div key={s.id} style={S.staffRow}>
+          <span style={S.avatar}>{s.name[0]}</span>
+          <span style={{ flex: 1, fontWeight: 600 }}>{s.name}</span>
+          <span style={{ color: sub, fontSize: 13, fontFamily: "monospace" }}>PIN: {s.pin}</span>
+          <button style={{ ...S.actionBtn, ...S.stornoBtn }} className="lift" onClick={() => handleRemove(s)}>Entfernen</button>
+        </div>
+      ))}
+      {showAdd && <StaffEditModal onSave={handleAdd} onCancel={() => setShowAdd(false)} />}
+    </div>
+  );
+}
+
+function StaffEditModal({ onSave, onCancel }) {
+  const [name, setName] = useState("");
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    if (!name.trim()) { setErr("Name erforderlich."); return; }
+    if (!/^\d{4}$/.test(pin)) { setErr("PIN muss genau 4 Ziffern sein."); return; }
+    onSave({ name: name.trim(), pin });
+  };
+
+  return (
+    <div style={S.overlay} className="g-overlay" onClick={onCancel}>
+      <div style={S.modal} className="g-modal" onClick={(e) => e.stopPropagation()}>
+        <h3 style={S.modalTitle}>Bedienung hinzufügen</h3>
+        <p style={S.modalSub}>Name und 4-stellige PIN vergeben</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 4 }}>
+          <div>
+            <label style={{ fontSize: 13, color: sub, display: "block", marginBottom: 4 }}>Name</label>
+            <input autoFocus value={name} onChange={(e) => { setName(e.target.value); setErr(""); }}
+              placeholder="z. B. Maria"
+              style={{ ...S.tischInput, fontSize: 16, padding: "10px 12px", textAlign: "left" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 13, color: sub, display: "block", marginBottom: 4 }}>PIN (4 Ziffern)</label>
+            <input value={pin} onChange={(e) => { setPin(e.target.value.replace(/\D/g, "").slice(0, 4)); setErr(""); }}
+              placeholder="z. B. 1234" type="tel" inputMode="numeric"
+              style={{ ...S.tischInput, fontSize: 20, padding: "10px 12px", textAlign: "center" }} />
+          </div>
+        </div>
+        {err && <div style={{ ...S.errText, textAlign: "left", marginBottom: 8 }}>{err}</div>}
+        <div style={S.modalBtns} className="g-modal-btns">
+          <button style={S.modalGhost} className="lift" onClick={onCancel}>Abbrechen</button>
+          <button style={S.modalPrimary} className="lift" onClick={submit}>Hinzufügen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminKarte({ karte, onSave, onDelete, onReset }) {
+  const [editItem, setEditItem] = useState(null);
+  const cats = [...new Set(karte.map((k) => k.cat))];
+
+  return (
+    <div style={S.adminCard}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+        <h3 style={S.adminH3}>Speisekarte</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={{ ...S.actionBtn, ...S.restoreBtn }} className="lift"
+            onClick={() => { if (confirm("Speisekarte auf Standard zurücksetzen?")) onReset(); }}>Reset</button>
+          <button style={S.addBtn} className="lift" onClick={() => setEditItem("new")}>+ Hinzufügen</button>
+        </div>
+      </div>
+      {cats.map((cat) => (
+        <div key={cat} style={{ marginBottom: 14 }}>
+          <div style={S.karteCategory}>{cat}</div>
+          {karte.filter((k) => k.cat === cat).map((item) => (
+            <div key={item.id} style={S.karteRow}>
+              <span style={{ flex: 1, fontWeight: 600 }}>{item.name}</span>
+              {item.size && <span style={{ color: sub, fontSize: 13 }}>{item.size}</span>}
+              <span style={{ color: gold, fontWeight: 700, minWidth: 60, textAlign: "right" }}>{euro(item.price)}</span>
+              <button style={S.actionBtn} className="lift" onClick={() => setEditItem(item)}>Bearbeiten</button>
+              <button style={{ ...S.actionBtn, ...S.stornoBtn }} className="lift"
+                onClick={() => { if (confirm(`"${item.name}" löschen?`)) onDelete(item.id); }}>Löschen</button>
+            </div>
+          ))}
+        </div>
+      ))}
+      {editItem && (
+        <KarteItemModal
+          item={editItem === "new" ? null : editItem}
+          onSave={(item) => { onSave(item); setEditItem(null); }}
+          onCancel={() => setEditItem(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function KarteItemModal({ item, onSave, onCancel }) {
+  const isNew = !item;
+  const [name, setName] = useState(item?.name ?? "");
+  const [cat, setCat] = useState(item?.cat ?? "Alkoholfrei");
+  const [kind, setKind] = useState(item?.kind ?? "drink");
+  const [size, setSize] = useState(item?.size ?? "");
+  const [priceStr, setPriceStr] = useState(item ? item.price.toFixed(2).replace(".", ",") : "");
+  const [optStr, setOptStr] = useState((item?.options ?? []).join(", "));
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    if (!name.trim()) { setErr("Name erforderlich."); return; }
+    const price = parseFloat(priceStr.replace(",", "."));
+    if (isNaN(price) || price < 0) { setErr("Ungültiger Preis."); return; }
+    const options = optStr.split(",").map((s) => s.trim()).filter(Boolean);
+    onSave({
+      id: item?.id ?? ("x" + Math.random().toString(36).slice(2, 8)),
+      name: name.trim(), cat: cat.trim(), kind,
+      size: size.trim() || undefined, price,
+      options: options.length ? options : undefined,
+    });
+  };
+
+  const CAT_OPTS = ["Alkoholfrei", "Bier", "Wein", "Essen"];
+  const inputStyle = { ...S.tischInput, fontSize: 15, padding: "9px 12px", textAlign: "left" };
+
+  return (
+    <div style={S.overlay} className="g-overlay" onClick={onCancel}>
+      <div style={S.modal} className="g-modal" onClick={(e) => e.stopPropagation()}>
+        <h3 style={S.modalTitle}>{isNew ? "Artikel hinzufügen" : "Artikel bearbeiten"}</h3>
+        <p style={S.modalSub}>{isNew ? "Neuen Eintrag zur Speisekarte hinzufügen" : item.name}</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 4 }}>
+          <div>
+            <label style={{ fontSize: 12, color: sub, display: "block", marginBottom: 3 }}>Name</label>
+            <input autoFocus value={name} onChange={(e) => { setName(e.target.value); setErr(""); }} style={inputStyle} />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 12, color: sub, display: "block", marginBottom: 3 }}>Kategorie</label>
+              <select value={cat} onChange={(e) => setCat(e.target.value)} style={{ ...inputStyle, background: panel2, border: `1px solid ${line}`, color: txt, borderRadius: 10 }}>
+                {CAT_OPTS.map((c) => <option key={c} value={c}>{c}</option>)}
+                {!CAT_OPTS.includes(cat) && <option value={cat}>{cat}</option>}
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 12, color: sub, display: "block", marginBottom: 3 }}>Station</label>
+              <select value={kind} onChange={(e) => setKind(e.target.value)} style={{ ...inputStyle, background: panel2, border: `1px solid ${line}`, color: txt, borderRadius: 10 }}>
+                <option value="drink">Theke</option>
+                <option value="food">Küche</option>
+              </select>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 12, color: sub, display: "block", marginBottom: 3 }}>Größe (opt.)</label>
+              <input value={size} onChange={(e) => setSize(e.target.value)} placeholder="z. B. 0,5 l" style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ fontSize: 12, color: sub, display: "block", marginBottom: 3 }}>Preis (€)</label>
+              <input value={priceStr} onChange={(e) => { setPriceStr(e.target.value); setErr(""); }}
+                placeholder="3,50" type="text" inputMode="decimal"
+                style={{ ...inputStyle, textAlign: "right" }} />
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: 12, color: sub, display: "block", marginBottom: 3 }}>Optionen (kommagetrennt, opt.)</label>
+            <input value={optStr} onChange={(e) => setOptStr(e.target.value)} placeholder="z. B. Ketchup, Senf" style={inputStyle} />
+          </div>
+        </div>
+        {err && <div style={{ ...S.errText, textAlign: "left", marginBottom: 6 }}>{err}</div>}
+        <div style={S.modalBtns} className="g-modal-btns">
+          <button style={S.modalGhost} className="lift" onClick={onCancel}>Abbrechen</button>
+          <button style={S.modalPrimary} className="lift" onClick={submit}>{isNew ? "Hinzufügen" : "Speichern"}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1189,7 +1439,7 @@ function Kpi({ label, value }) {
    ============================================================================ */
 function Display({ kind, onExit }) {
   const title = kind === "drink" ? "Theke · Getränke" : "Küche · Essen";
-  const accent = kind === "drink" ? "#e0a64a" : "#d8694a";
+  const accent = kind === "drink" ? amber : "#d8694a";
   const { tickets, setTicketStatus } = useTickets(kind);
 
   const mine = tickets; // Hook liefert nur offene (nicht fertige) Bons
@@ -1289,7 +1539,7 @@ function StyleTag() {
       .lift:hover { transform: translateY(-1px); }
       .lift:active { transform: translateY(1px) scale(.99); }
       ::-webkit-scrollbar { width: 10px; height: 10px; }
-      ::-webkit-scrollbar-thumb { background: #2c3340; border-radius: 6px; }
+      ::-webkit-scrollbar-thumb { background: #4a1a30; border-radius: 6px; }
       @media (prefers-reduced-motion: reduce){ .lift{ transition:none; } }
 
       /* ── Mobile ─────────────────────────────────────────────── */
@@ -1315,7 +1565,7 @@ function StyleTag() {
           display: block;
           width: 36px;
           height: 4px;
-          background: #3a4350;
+          background: #5a2040;
           border-radius: 2px;
           margin: 0 auto 18px;
         }
@@ -1332,7 +1582,7 @@ function StyleTag() {
         .g-cart-pane {
           max-height: 320px !important;
           border-left: none !important;
-          border-top: 1px solid #2a323d;
+          border-top: 1px solid #3a1828;
           max-height: calc(100svh - 57px);
         }
 
@@ -1356,8 +1606,8 @@ function StyleTag() {
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 6px 10px;
-          background: #1c232d;
-          border: 1px solid #2a323d;
+          background: #1f0f18;
+          border: 1px solid #3a1828;
           border-radius: 12px;
           padding: 12px;
           margin-bottom: 8px;
@@ -1373,7 +1623,7 @@ function StyleTag() {
         .g-admin-table td::before {
           content: attr(data-label);
           font-size: 10px;
-          color: #8b97a6;
+          color: #9b7888;
           text-transform: uppercase;
           letter-spacing: .05em;
           font-weight: 600;
@@ -1385,15 +1635,16 @@ function StyleTag() {
   );
 }
 
-const ink = "#0d1117";
-const panel = "#161b22";
-const panel2 = "#1c232d";
-const line = "#2a323d";
-const txt = "#e8edf2";
-const sub = "#8b97a6";
-const amber = "#e0a64a";
-const amberDeep = "#c4862f";
-const green = "#3fb27f";
+const ink = "#0d0509";
+const panel = "#180c12";
+const panel2 = "#1f0f18";
+const line = "#3a1828";
+const txt = "#f4eaee";
+const sub = "#9b7888";
+const amber = "#8C1A50";
+const amberDeep = "#6b0f3a";
+const gold = "#C4A242";
+const green = "#2ea563";
 
 const S = {
   appWrap: { minHeight: "100vh", background: ink, color: txt, fontFamily: "Inter, system-ui, sans-serif" },
@@ -1418,10 +1669,10 @@ const S = {
   avatar: { width: 30, height: 30, borderRadius: "50%", background: amberDeep, color: ink, display: "grid", placeItems: "center", fontWeight: 800 },
 
   pinPad: { background: panel, border: `1px solid ${line}`, borderRadius: 18, padding: 20, width: 300 },
-  pinDisplay: { fontSize: 30, letterSpacing: 14, textAlign: "center", padding: "10px 0", color: amber, fontWeight: 700 },
+  pinDisplay: { fontSize: 30, letterSpacing: 14, textAlign: "center", padding: "10px 0", color: gold, fontWeight: 700 },
   pinGrid: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: 10 },
   pinKey: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, padding: "16px 0", fontSize: 22, fontWeight: 600, color: txt },
-  pinOk: { background: amber, color: ink },
+  pinOk: { background: amber, color: txt },
   pinHint: { color: sub, fontSize: 11.5, textAlign: "center", marginTop: 12, marginBottom: 0 },
   errText: { color: "#e5645d", textAlign: "center", fontSize: 13, marginTop: 4 },
 
@@ -1432,7 +1683,7 @@ const S = {
   iconBtn: { background: panel2, border: `1px solid ${line}`, color: txt, borderRadius: 10, padding: "9px 14px", fontSize: 14, fontWeight: 600 },
   userTag: { fontWeight: 700, fontSize: 15 },
   displayTitle: { fontFamily: "Fraunces, serif", fontSize: 22, fontWeight: 600 },
-  queueCount: { background: panel2, border: `1px solid ${line}`, borderRadius: 999, padding: "6px 14px", fontSize: 14, fontWeight: 700, color: amber },
+  queueCount: { background: panel2, border: `1px solid ${line}`, borderRadius: 999, padding: "6px 14px", fontSize: 14, fontWeight: 700, color: gold },
 
   body: { padding: 20, maxWidth: 1100, margin: "0 auto", width: "100%" },
   h2: { fontFamily: "Fraunces, serif", fontWeight: 600, fontSize: 26, margin: "4px 0 18px" },
@@ -1442,20 +1693,20 @@ const S = {
   tableBusy: { borderColor: amber + "88", background: panel2 },
   tableMain: { background: "transparent", color: txt, padding: "20px 16px 14px", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4 },
   tableNo: { fontSize: 34, fontWeight: 800, fontFamily: "Fraunces, serif", lineHeight: 1 },
-  tableMeta: { fontSize: 13, color: amber, fontWeight: 600 },
+  tableMeta: { fontSize: 13, color: gold, fontWeight: 600 },
   tableFree: { fontSize: 13, color: sub },
-  tableBill: { background: amber, color: ink, fontWeight: 700, padding: "10px 0", fontSize: 14 },
+  tableBill: { background: amber, color: txt, fontWeight: 700, padding: "10px 0", fontSize: 14 },
 
   tischInputBox: { background: panel, border: `1px solid ${line}`, borderRadius: 20, padding: "28px 24px 24px", width: "100%", maxWidth: 340, display: "flex", flexDirection: "column", alignItems: "stretch" },
   tischInput: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, color: txt, fontSize: 32, fontWeight: 700, fontFamily: "Fraunces, serif", textAlign: "center", padding: "14px 12px", outline: "none", width: "100%", boxSizing: "border-box" },
-  tischDisplay: { background: panel2, border: `1px solid ${line}`, borderRadius: 14, fontSize: 48, fontWeight: 800, fontFamily: "Fraunces, serif", color: amber, textAlign: "center", padding: "14px 12px", marginBottom: 10, minHeight: 82, display: "flex", alignItems: "center", justifyContent: "center", letterSpacing: "0.08em" },
+  tischDisplay: { background: panel2, border: `1px solid ${line}`, borderRadius: 14, fontSize: 48, fontWeight: 800, fontFamily: "Fraunces, serif", color: gold, textAlign: "center", padding: "14px 12px", marginBottom: 10, minHeight: 82, display: "flex", alignItems: "center", justifyContent: "center", letterSpacing: "0.08em" },
   tischStatus: { fontSize: 13, color: sub, textAlign: "center", padding: "8px 12px", background: panel2, borderRadius: 10, border: `1px solid ${line}`, marginBottom: 6 },
-  tischStatusBusy: { color: amber, borderColor: amber + "88" },
-  tischConfirm: { flex: 1, background: amber, color: ink, fontWeight: 700, borderRadius: 12, padding: "14px 0", fontSize: 16 },
-  tischBillBtn: { background: amber, color: ink, fontWeight: 700, borderRadius: 12, padding: "14px 16px", fontSize: 15 },
+  tischStatusBusy: { color: gold, borderColor: gold + "88" },
+  tischConfirm: { flex: 1, background: amber, color: txt, fontWeight: 700, borderRadius: 12, padding: "14px 0", fontSize: 16 },
+  tischBillBtn: { background: amber, color: txt, fontWeight: 700, borderRadius: 12, padding: "14px 16px", fontSize: 15 },
   numpadGrid: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 },
   numpadKey: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, color: txt, fontSize: 24, fontWeight: 700, fontFamily: "Fraunces, serif", padding: "16px 0" },
-  numpadOk: { background: amber, color: ink, fontFamily: "Inter, system-ui, sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: "0.02em" },
+  numpadOk: { background: amber, color: txt, fontFamily: "Inter, system-ui, sans-serif", fontWeight: 800, fontSize: 16, letterSpacing: "0.02em" },
   numpadDel: { color: sub, fontSize: 20, fontFamily: "Inter, system-ui, sans-serif", fontWeight: 400 },
 
   orderLayout: { display: "grid", gridTemplateColumns: "1fr 360px", gap: 0, flex: 1, minHeight: 0 },
@@ -1464,13 +1715,13 @@ const S = {
   tischTitle: { fontFamily: "Fraunces, serif", fontSize: 24, margin: 0 },
   catBar: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
   catBtn: { background: panel, border: `1px solid ${line}`, color: sub, borderRadius: 999, padding: "9px 18px", fontSize: 15, fontWeight: 600 },
-  catActive: { background: amber, color: ink, borderColor: amber },
+  catActive: { background: amber, color: txt, borderColor: amber },
   menuGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 },
   menuItem: { background: panel, border: `1px solid ${line}`, borderRadius: 14, padding: "16px 14px", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8, color: txt, textAlign: "left", minHeight: 92, justifyContent: "space-between" },
   menuName: { fontSize: 16, fontWeight: 600, lineHeight: 1.25 },
   menuMeta: { display: "flex", alignItems: "center", gap: 10, width: "100%" },
   menuSize: { fontSize: 12.5, color: sub },
-  menuPrice: { fontSize: 15, fontWeight: 700, color: amber, marginLeft: "auto" },
+  menuPrice: { fontSize: 15, fontWeight: 700, color: gold, marginLeft: "auto" },
   optBadge: { fontSize: 11, color: "#d8694a", fontWeight: 700 },
 
   cartPane: { background: panel, borderLeft: `1px solid ${line}`, display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 57px)" },
@@ -1500,24 +1751,24 @@ const S = {
   modalSub: { color: sub, fontSize: 13.5, margin: "0 0 14px" },
   optList: { display: "flex", flexDirection: "column", gap: 8 },
   optRow: { display: "flex", alignItems: "center", gap: 12, background: panel2, border: `1px solid ${line}`, borderRadius: 12, padding: "14px 16px", color: txt, fontSize: 16, fontWeight: 600 },
-  optRowActive: { borderColor: amber, background: "#241f15" },
-  checkbox: { width: 24, height: 24, borderRadius: 7, border: `2px solid ${sub}`, display: "grid", placeItems: "center", fontSize: 14, fontWeight: 900, color: ink, flexShrink: 0 },
+  optRowActive: { borderColor: amber, background: "#2d0e1c" },
+  checkbox: { width: 24, height: 24, borderRadius: 7, border: `2px solid ${sub}`, display: "grid", placeItems: "center", fontSize: 14, fontWeight: 900, color: txt, flexShrink: 0 },
   checkboxOn: { background: amber, borderColor: amber },
   modalBtns: { display: "flex", gap: 10, marginTop: 18 },
   modalGhost: { flex: 1, background: panel2, border: `1px solid ${line}`, color: txt, borderRadius: 12, padding: "13px 0", fontWeight: 600 },
-  modalPrimary: { flex: 1, background: amber, color: ink, borderRadius: 12, padding: "13px 0", fontWeight: 800 },
+  modalPrimary: { flex: 1, background: amber, color: txt, borderRadius: 12, padding: "13px 0", fontWeight: 800 },
 
   billHead: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
   billLayout: { display: "grid", gridTemplateColumns: "1fr 320px", gap: 18, alignItems: "start" },
   billItems: { background: panel, border: `1px solid ${line}`, borderRadius: 16, padding: 16 },
   modeBar: { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
   modeBtn: { background: panel2, border: `1px solid ${line}`, color: sub, borderRadius: 999, padding: "8px 16px", fontSize: 14, fontWeight: 600 },
-  modeActive: { background: amber, color: ink, borderColor: amber },
+  modeActive: { background: amber, color: txt, borderColor: amber },
   itemList: { display: "flex", flexDirection: "column", gap: 6 },
   groupRow: { display: "flex", alignItems: "center", gap: 12, padding: "12px 8px", borderBottom: `1px solid ${line}` },
-  gQty: { fontWeight: 800, color: amber, minWidth: 32 },
+  gQty: { fontWeight: 800, color: gold, minWidth: 32 },
   billItemRow: { display: "flex", alignItems: "center", gap: 12, padding: "12px 10px", background: panel2, border: `1px solid ${line}`, borderRadius: 10, color: txt, textAlign: "left" },
-  billItemPicked: { borderColor: amber, background: "#241f15" },
+  billItemPicked: { borderColor: amber, background: "#2d0e1c" },
   biName: { flex: 1, fontSize: 15, fontWeight: 500 },
   biOpts: { color: "#d8694a", fontStyle: "normal", fontSize: 13 },
   biPrice: { fontWeight: 700 },
@@ -1527,7 +1778,7 @@ const S = {
   payBtn: { width: "100%", background: green, color: "#06281c", fontWeight: 800, fontSize: 16, padding: "15px 0", borderRadius: 12, marginTop: 6 },
   splitHint: { color: sub, fontSize: 12, marginTop: 10, lineHeight: 1.5 },
   stepperRow: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
-  evenBig: { fontSize: 30, fontFamily: "Fraunces, serif", fontWeight: 700, color: amber, marginBottom: 12 },
+  evenBig: { fontSize: 30, fontFamily: "Fraunces, serif", fontWeight: 700, color: gold, marginBottom: 12 },
   evenSmall: { fontSize: 14, color: sub, fontFamily: "Inter", fontWeight: 500 },
   history: { marginTop: 18, borderTop: `1px solid ${line}`, paddingTop: 12 },
   historyTitle: { fontSize: 12.5, color: sub, marginBottom: 8, textTransform: "uppercase", letterSpacing: ".05em" },
@@ -1541,21 +1792,21 @@ const S = {
   emptyBig: { fontSize: 64, opacity: 0.6 },
   ticketGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16, alignContent: "start" },
   ticket: { background: panel, border: `1px solid ${line}`, borderTop: "4px solid", borderRadius: 14, padding: 16, display: "flex", flexDirection: "column", gap: 10 },
-  ticketWork: { background: "#1f2630", boxShadow: `0 0 0 1px ${amber}55` },
+  ticketWork: { background: "#280f1c", boxShadow: `0 0 0 1px ${amber}55` },
   ticketHead: { display: "flex", justifyContent: "space-between", alignItems: "center" },
-  ticketTisch: { color: ink, fontWeight: 800, padding: "6px 14px", borderRadius: 8, fontSize: 16 },
+  ticketTisch: { color: txt, fontWeight: 800, padding: "6px 14px", borderRadius: 8, fontSize: 16 },
   ticketAge: { fontSize: 12.5, color: sub },
   ticketMeta: { fontSize: 12.5, color: sub, marginTop: -4 },
   ticketLines: { display: "flex", flexDirection: "column", gap: 8, padding: "6px 0", borderTop: `1px solid ${line}`, borderBottom: `1px solid ${line}` },
   ticketLine: { display: "flex", gap: 10, alignItems: "flex-start" },
-  tlQty: { fontWeight: 800, fontSize: 18, color: amber, minWidth: 32 },
+  tlQty: { fontWeight: 800, fontSize: 18, color: gold, minWidth: 32 },
   tlName: { fontSize: 16, fontWeight: 600, lineHeight: 1.3 },
   tlSize: { fontSize: 13, color: sub, fontWeight: 400 },
   tlOpts: { fontSize: 13, color: "#d8694a", fontWeight: 600, marginTop: 2 },
   ticketBtns: { display: "flex", gap: 8 },
   tBtn: { flex: 1, padding: "12px 0", borderRadius: 10, fontWeight: 700, fontSize: 14 },
   tBtnStart: { background: panel2, border: `1px solid ${line}`, color: txt },
-  tBtnStartActive: { background: amber, color: ink },
+  tBtnStartActive: { background: amber, color: txt },
   tBtnDone: { background: green, color: "#06281c" },
   doneStrip: { marginTop: 20, paddingTop: 14, borderTop: `1px solid ${line}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   doneLabel: { fontSize: 13, color: sub },
@@ -1566,10 +1817,10 @@ const S = {
   payDue: { fontSize: 22, fontFamily: "Fraunces, serif", color: txt },
   payField: { display: "flex", justifyContent: "space-between", alignItems: "center", background: panel2, border: `1px solid ${line}`, borderRadius: 12, padding: "14px 16px", marginTop: 8 },
   payFieldLabel: { color: sub, fontSize: 14 },
-  payFieldValue: { fontSize: 24, fontWeight: 800, color: amber },
+  payFieldValue: { fontSize: 24, fontWeight: 800, color: gold },
   quickRow: { display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" },
   quickBtn: { flex: 1, minWidth: 72, background: panel2, border: `1px solid ${line}`, color: txt, borderRadius: 10, padding: "11px 0", fontSize: 14, fontWeight: 700 },
-  quickExact: { borderColor: amber, color: amber },
+  quickExact: { borderColor: gold, color: gold },
   payGrid: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 9, marginTop: 12 },
   payKey: { background: panel2, border: `1px solid ${line}`, borderRadius: 12, padding: "16px 0", fontSize: 22, fontWeight: 600, color: txt },
   changeBox: { display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: 12, padding: "14px 16px", marginTop: 14 },
@@ -1580,8 +1831,8 @@ const S = {
   /* Tagesabschluss */
   dayBar: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
   dayChip: { background: panel2, border: `1px solid ${line}`, color: sub, borderRadius: 999, padding: "8px 16px", fontSize: 13.5, fontWeight: 600, whiteSpace: "nowrap" },
-  dayChipOn: { background: amber, color: ink, borderColor: amber },
-  dayCloseBar: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "#1a1210", border: `1px solid #c5303044`, borderRadius: 14, padding: "14px 18px", marginBottom: 14, gap: 12, flexWrap: "wrap" },
+  dayChipOn: { background: amber, color: txt, borderColor: amber },
+  dayCloseBar: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "#1a0810", border: `1px solid #c5303044`, borderRadius: 14, padding: "14px 18px", marginBottom: 14, gap: 12, flexWrap: "wrap" },
   dayCloseTitle: { fontWeight: 700, fontSize: 15, marginBottom: 2 },
   dayCloseSub: { fontSize: 13, color: sub },
   dayCloseBtn: { background: "#c53030", color: "#fecaca", fontWeight: 700, borderRadius: 10, padding: "10px 18px", fontSize: 14, border: "none", whiteSpace: "nowrap" },
@@ -1602,7 +1853,7 @@ const S = {
   adminBody: { padding: 20, maxWidth: 1240, margin: "0 auto", width: "100%" },
   kpiRow: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 14 },
   kpi: { background: panel, border: `1px solid ${line}`, borderRadius: 14, padding: "16px 18px", display: "flex", flexDirection: "column", gap: 4 },
-  kpiValue: { fontSize: 24, fontWeight: 800, fontFamily: "Fraunces, serif", color: amber },
+  kpiValue: { fontSize: 24, fontWeight: 800, fontFamily: "Fraunces, serif", color: gold },
   kpiLabel: { fontSize: 12.5, color: sub, textTransform: "uppercase", letterSpacing: ".05em" },
   exportMsg: { background: panel2, border: `1px solid ${line}`, borderRadius: 10, padding: "10px 14px", fontSize: 13.5, color: sub, marginBottom: 14 },
   adminGrid: { display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 18, alignItems: "start" },
@@ -1612,7 +1863,7 @@ const S = {
   sortBar: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
   sortLabel: { fontSize: 13, color: sub },
   sortChip: { background: panel2, border: `1px solid ${line}`, color: sub, borderRadius: 999, padding: "7px 14px", fontSize: 13.5, fontWeight: 600 },
-  sortChipOn: { background: amber, color: ink, borderColor: amber },
+  sortChipOn: { background: amber, color: txt, borderColor: amber },
   tableScroll: { overflowX: "auto", maxHeight: 460, overflowY: "auto" },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 14 },
   th: { textAlign: "left", padding: "8px 10px", color: sub, fontSize: 12, textTransform: "uppercase", letterSpacing: ".04em", borderBottom: `1px solid ${line}`, position: "sticky", top: 0, background: panel },
@@ -1630,6 +1881,15 @@ const S = {
   rankBarFill: { height: "100%", borderRadius: 999 },
   rankRev: { fontSize: 12.5, color: sub, marginTop: 4, display: "inline-block" },
 
-  configWarn: { background: "#3a2a12", color: "#f0c674", borderBottom: "1px solid #5a4520", padding: "12px 16px", fontSize: 13.5, textAlign: "center", lineHeight: 1.5 },
+  configWarn: { background: "#2a0a14", color: "#f4a0b8", borderBottom: `1px solid ${line}`, padding: "12px 16px", fontSize: 13.5, textAlign: "center", lineHeight: 1.5 },
+
+  /* Admin Tabs + neue Verwaltungs-Elemente */
+  adminTabBar: { display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" },
+  adminTab: { background: panel2, border: `1px solid ${line}`, color: sub, borderRadius: 999, padding: "10px 18px", fontSize: 14, fontWeight: 600 },
+  adminTabOn: { background: amber, color: txt, borderColor: amber },
+  addBtn: { background: amber, color: txt, fontWeight: 700, borderRadius: 10, padding: "9px 16px", fontSize: 14, border: "none" },
+  staffRow: { display: "flex", alignItems: "center", gap: 12, padding: "12px 4px", borderBottom: `1px solid ${line}` },
+  karteCategory: { fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: sub, marginBottom: 8 },
+  karteRow: { display: "flex", alignItems: "center", gap: 10, padding: "10px 4px", borderBottom: `1px solid ${line}`, flexWrap: "wrap" },
 };
 

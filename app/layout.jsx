@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Schankwirt — Bestell-Terminal",
-  description: "Bestell-Terminal für Fest & Gastronomie",
+  title: "Anglerhock 2026 — Bestell-Terminal",
+  description: "Bestell-Terminal für den Anglerhock 2026",
 };
 
 export const viewport = {
