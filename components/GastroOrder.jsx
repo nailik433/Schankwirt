@@ -387,6 +387,11 @@ function OrderTaker({ tisch, user, db, karte: karteProp, onBack, onBill }) {
   const karte = karteProp ?? KARTE;
   const catOrder = [...new Set(karte.map((k) => k.cat))];
   const visible = karte.filter((k) => k.cat === activeCat);
+  const cartQty = useMemo(() => {
+    const m = {};
+    cart.forEach((l) => { m[l.item.id] = (m[l.item.id] || 0) + l.qty; });
+    return m;
+  }, [cart]);
 
   return (
     <div style={S.orderLayout} className="g-order-layout">
@@ -415,6 +420,7 @@ function OrderTaker({ tisch, user, db, karte: karteProp, onBack, onBill }) {
               <span style={S.menuName}>{item.name}</span>
               <span style={S.menuMeta}>
                 {item.size ? <span style={S.menuSize}>{item.size}</span> : null}
+                {cartQty[item.id] ? <span style={S.menuQtyBadge}>{cartQty[item.id]}×</span> : null}
                 <span style={S.menuPrice}>{euro(item.price)}</span>
               </span>
               {item.options?.length > 0 && <span style={S.optBadge}>＋ Beilagen</span>}
@@ -1733,6 +1739,7 @@ const S = {
   menuMeta: { display: "flex", alignItems: "center", gap: 10, width: "100%" },
   menuSize: { fontSize: 12.5, color: sub },
   menuPrice: { fontSize: 15, fontWeight: 700, color: gold, marginLeft: "auto" },
+  menuQtyBadge: { fontSize: 13, fontWeight: 800, color: txt, background: amber, borderRadius: 999, padding: "2px 8px", lineHeight: 1.4 },
   optBadge: { fontSize: 11, color: "#d8694a", fontWeight: 700 },
 
   cartPane: { background: panel, borderLeft: `1px solid ${line}`, display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 57px)" },
