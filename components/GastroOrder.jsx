@@ -683,6 +683,7 @@ function BillView({ tisch, db, user, onBack }) {
 /* ---------- Bezahl-Pad mit Rückgeld ---------- */
 function PayPad({ amount, label, onCancel, onConfirm }) {
   const [entry, setEntry] = useState(""); // Eingabe als String, z.B. "20" oder "20,50"
+  const [tipMode, setTipMode] = useState(false);
   const received = parseFloat(entry.replace(",", ".")) || 0;
   const change = received - amount;
   const enough = received >= amount && entry !== "";
@@ -691,6 +692,7 @@ function PayPad({ amount, label, onCancel, onConfirm }) {
   const quick = quickAmounts(amount);
 
   const press = (k) => {
+    setTipMode(false);
     if (k === "⌫") return setEntry((e) => e.slice(0, -1));
     if (k === "C") return setEntry("");
     if (k === ",") return setEntry((e) => (e.includes(",") ? e : e === "" ? "0," : e + ","));
@@ -737,8 +739,18 @@ function PayPad({ amount, label, onCancel, onConfirm }) {
           ))}
         </div>
 
-        <div style={{ ...S.changeBox, ...(enough ? S.changeOk : S.changeWait) }} className="g-change-box">
-          <span>Rückgeld</span>
+        <div style={S.tipRow} className="g-quick-row">
+          <span style={S.tipLabel}>Trinkgeld:</span>
+          {[1, 2, 5].map((t) => (
+            <button key={t} className="lift" style={S.tipBtn}
+              onClick={() => { setEntry(formatEntry(Math.max(received || amount, amount) + t)); setTipMode(true); }}>
+              +{t} €
+            </button>
+          ))}
+        </div>
+
+        <div style={{ ...S.changeBox, ...(enough ? (tipMode && change > 0 ? S.tipOk : S.changeOk) : S.changeWait) }} className="g-change-box">
+          <span>{tipMode && change > 0 ? "Trinkgeld" : "Rückgeld"}</span>
           <strong style={S.changeBig}>
             {entry === "" ? "—" : change >= 0 ? euro(change) : `fehlen ${euro(-change)}`}
           </strong>
@@ -1845,6 +1857,10 @@ const S = {
   changeWait: { background: panel2, border: `1px solid ${line}`, color: sub },
   changeOk: { background: "#13301f", border: `1px solid ${green}`, color: green },
   changeBig: { fontSize: 24, fontFamily: "Fraunces, serif" },
+  tipRow: { display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" },
+  tipLabel: { fontSize: 12.5, color: sub, fontWeight: 600 },
+  tipBtn: { flex: 1, minWidth: 52, background: panel2, border: `1px solid ${line}`, color: gold, borderRadius: 10, padding: "9px 0", fontSize: 13, fontWeight: 700 },
+  tipOk: { background: "#1a1108", border: `1px solid ${gold}`, color: gold },
 
   /* Tagesabschluss */
   dayBar: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
