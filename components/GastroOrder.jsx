@@ -329,11 +329,15 @@ function OrderTaker({ tisch, user, db, karte: karteProp, onBack, onBill }) {
   const [optFor, setOptFor] = useState(null); // Item, für das gerade Beilagen gewählt werden
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState("");
+  const [flashing, setFlashing] = useState(new Set());
 
   const existing = db[tisch]?.items?.filter((i) => !i.paid) || [];
   const existingSum = existing.reduce((a, i) => a + i.price * i.qty, 0);
 
   const addItem = (item) => {
+    if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(22);
+    setFlashing((prev) => new Set([...prev, item.id]));
+    setTimeout(() => setFlashing((prev) => { const n = new Set(prev); n.delete(item.id); return n; }), 320);
     if (item.options && item.options.length > 0) {
       setOptFor({ item, chosen: [] });
       return;
@@ -407,7 +411,7 @@ function OrderTaker({ tisch, user, db, karte: karteProp, onBack, onBill }) {
         </div>
         <div style={S.menuGrid}>
           {visible.map((item) => (
-            <button key={item.id} style={S.menuItem} className="lift" onClick={() => addItem(item)}>
+            <button key={item.id} style={S.menuItem} className={flashing.has(item.id) ? "lift item-add" : "lift"} onClick={() => addItem(item)}>
               <span style={S.menuName}>{item.name}</span>
               <span style={S.menuMeta}>
                 {item.size ? <span style={S.menuSize}>{item.size}</span> : null}
@@ -1532,6 +1536,13 @@ function TopBar({ left, center, right }) {
 function StyleTag() {
   return (
     <style>{`
+      @keyframes item-add {
+        0%   { transform: scale(1);    box-shadow: none; border-color: transparent; }
+        35%  { transform: scale(.93);  box-shadow: 0 0 0 4px #8C1A5066; border-color: #8C1A50; }
+        100% { transform: scale(1);    box-shadow: none; border-color: transparent; }
+      }
+      .item-add { animation: item-add .3s ease-out forwards !important; transition: none !important; }
+
       @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap');
       * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
       button { font-family: inherit; cursor: pointer; border: none; }
